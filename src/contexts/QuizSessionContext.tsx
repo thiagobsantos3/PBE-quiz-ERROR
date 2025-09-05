@@ -72,7 +72,17 @@ export function QuizSessionProvider({ children }: { children: ReactNode }) {
 
       if (error) throw error;
 
-      setSessions(data || []);
+      // Merge refreshed summaries into existing detailed entries to avoid losing fields like questions/results
+      setSessions(prev => {
+        const previousById = new Map(prev.map(s => [s.id, s]));
+        const merged = (data || []).map(s => {
+          const existing = previousById.get(s.id);
+          return existing ? { ...existing, ...s } : s as any;
+        });
+        // Ensure any currently active sessions not in the fetched window are preserved
+        const preservedActive = prev.filter(s => s.status === 'active' && !merged.some(m => m.id === s.id));
+        return [...preservedActive, ...merged];
+      });
     } catch (error) {
       console.error('Error loading quiz sessions:', error);
     }
@@ -115,14 +125,19 @@ export function QuizSessionProvider({ children }: { children: ReactNode }) {
     // First try to find in local state
     const localSession = sessions.find(session => session.id === sessionId);
     if (localSession) {
-      developerLog('✅ Found quiz session in local state:', sessionId);
-      return localSession;
+      // Detect partial/local summary objects (e.g., after list refresh) and refetch full details
+      const isPartial = !Array.isArray((localSession as any).questions) || (localSession as any).questions.length === 0;
+      if (isPartial) {
+        developerLog('ℹ️ Local session is partial, refetching full data from database:', sessionId);
+      } else {
+        developerLog('✅ Found full quiz session in local state:', sessionId);
+        return localSession;
+      }
     }
 
-    // If not found locally, fetch from database
+    // If not found locally or partial, fetch from database
     try {
-      developerLog('🔄 Quiz session not found locally, fetching from database:', sessionId);
-      
+      developerLog('🔄 Fetching quiz session from database:', sessionId);
       const { data, error } = await supabase
         .from('quiz_sessions')
         .select('*')
@@ -141,11 +156,17 @@ export function QuizSessionProvider({ children }: { children: ReactNode }) {
       }
 
       developerLog('✅ Quiz session fetched from database:', data);
-      
-      // Add to local state for future access
-      setSessions(prev => [data, ...prev.filter(s => s.id !== sessionId)]);
-      
-      return data;
+
+      // Merge into local state, preserving any existing fields if present
+      setSessions(prev => {
+        const exists = prev.find(s => s.id === sessionId);
+        if (exists) {
+          return prev.map(s => (s.id === sessionId ? { ...s, ...data } : s));
+        }
+        return [data, ...prev];
+      });
+
+      return data as any;
     } catch (error) {
       developerLog('💥 Error fetching quiz session:', error);
       return null;
