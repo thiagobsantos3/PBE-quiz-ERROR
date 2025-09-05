@@ -546,6 +546,32 @@ export function QuizSessionProvider({ children }: { children: ReactNode }) {
 
         developerLog('✅ Quiz session updated successfully');
 
+        // Ensure actual time is recorded using authoritative logs as fallback
+        try {
+          const { data: timeAgg, error: timeErr } = await supabase
+            .from('quiz_question_logs')
+            .select('time_spent', { count: 'exact', head: false })
+            .eq('quiz_session_id', sessionId);
+
+          if (!timeErr && Array.isArray(timeAgg)) {
+            const sumSeconds = timeAgg.reduce((sum: number, r: any) => sum + (Number(r?.time_spent) || 0), 0);
+            const currentSeconds = Number(finalUpdates.total_actual_time_spent_seconds) || 0;
+            if (sumSeconds > 0 && sumSeconds !== currentSeconds) {
+              developerLog('⏱ Updating total_actual_time_spent_seconds from logs sum:', { sumSeconds, currentSeconds });
+              const { error: setTimeErr } = await supabase
+                .from('quiz_sessions')
+                .update({ total_actual_time_spent_seconds: sumSeconds })
+                .eq('id', sessionId);
+              if (!setTimeErr) {
+                // Also reflect in local state immediately
+                finalUpdates.total_actual_time_spent_seconds = sumSeconds;
+              }
+            }
+          }
+        } catch (tErr) {
+          developerLog('⚠️ Could not ensure actual time from logs (non-blocking):', tErr);
+        }
+
         // Handle assignment completion
         if (currentSession.assignment_id) {
           try {
