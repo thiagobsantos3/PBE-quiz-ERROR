@@ -63,25 +63,40 @@ export function QuizSessionProvider({ children }: { children: ReactNode }) {
     if (!user) return;
 
     try {
-      const { data, error } = await supabase
+      // Fetch recent session summaries (lightweight)
+      const { data: summaries, error: summariesError } = await supabase
         .from('quiz_sessions')
         .select('id, title, type, status, total_points, max_points, total_actual_time_spent_seconds, completed_at, created_at')
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
         .limit(50);
 
-      if (error) throw error;
+      if (summariesError) throw summariesError;
 
-      // Merge refreshed summaries into existing detailed entries to avoid losing fields like questions/results
+      // Fetch full details for active sessions to power the Resume UI
+      const { data: activeDetails, error: activeError } = await supabase
+        .from('quiz_sessions')
+        .select('*')
+        .eq('user_id', user.id)
+        .eq('status', 'active');
+
+      if (activeError) throw activeError;
+
+      // Merge: start with summaries, then overlay active session details
       setSessions(prev => {
         const previousById = new Map(prev.map(s => [s.id, s]));
-        const merged = (data || []).map(s => {
+        const mergedSummaries = (summaries || []).map(s => {
           const existing = previousById.get(s.id);
-          return existing ? { ...existing, ...s } : s as any;
+          return existing ? { ...existing, ...s } : (s as any);
+        });
+        const mergedById = new Map(mergedSummaries.map(s => [s.id, s]));
+        (activeDetails || []).forEach(detailed => {
+          const existing = mergedById.get(detailed.id) || previousById.get(detailed.id);
+          mergedById.set(detailed.id, existing ? { ...existing, ...detailed } : detailed);
         });
         // Ensure any currently active sessions not in the fetched window are preserved
-        const preservedActive = prev.filter(s => s.status === 'active' && !merged.some(m => m.id === s.id));
-        return [...preservedActive, ...merged];
+        const preservedActive = prev.filter(s => s.status === 'active' && !mergedById.has(s.id));
+        return [...preservedActive, ...Array.from(mergedById.values())];
       });
     } catch (error) {
       console.error('Error loading quiz sessions:', error);
