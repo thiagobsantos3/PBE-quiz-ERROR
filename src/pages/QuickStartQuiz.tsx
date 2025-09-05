@@ -95,6 +95,7 @@ export function QuickStartQuiz() {
         // Calculate quiz metadata
         const totalPoints = selectedQuestions.reduce((sum, q) => sum + q.points, 0);
         const estimatedSeconds = selectedQuestions.reduce((sum, q) => sum + q.time_to_answer, 0);
+        const estimatedMinutes = Math.max(1, Math.round(estimatedSeconds / 60));
 
         developerLog('📊 Quiz metadata - Points:', totalPoints, 'Minutes:', estimatedMinutes);
 
@@ -117,6 +118,8 @@ export function QuickStartQuiz() {
           total_points: 0,
           max_points: totalPoints,
           total_actual_time_spent_seconds: 0, // Will be calculated when completed
+          // Keep DB-compatible minutes estimate if column exists; harmless otherwise
+          estimated_minutes: estimatedMinutes as any,
         });
 
         developerLog('🎉 Quiz session created with ID:', sessionId);
