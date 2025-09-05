@@ -118,8 +118,6 @@ export function QuickStartQuiz() {
           total_points: 0,
           max_points: totalPoints,
           total_actual_time_spent_seconds: 0, // Will be calculated when completed
-          // Keep DB-compatible minutes estimate if column exists; harmless otherwise
-          estimated_minutes: estimatedMinutes as any,
         });
 
         developerLog('🎉 Quiz session created with ID:', sessionId);
