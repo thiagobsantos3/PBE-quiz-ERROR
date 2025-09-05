@@ -73,7 +73,7 @@ export function QuizDetailsModal({ isOpen, onClose, quizSessionId, quizTitle }: 
           time_spent,
           is_correct,
           answered_at,
-          questions!inner (
+          question:questions!inner (
             book_of_bible,
             chapter,
             question,
@@ -91,7 +91,40 @@ export function QuizDetailsModal({ isOpen, onClose, quizSessionId, quizTitle }: 
       }
 
       console.log('✅ Question details fetched:', data?.length || 0, 'questions');
-      setQuestionDetails(data || []);
+
+      let details = data || [];
+
+      // Fallback: if some entries lack joined question (e.g., question deleted or RLS),
+      // enrich from quiz_sessions.questions JSON
+      if (details.some(d => !d.question)) {
+        const { data: sessionRow, error: sessionErr } = await supabase
+          .from('quiz_sessions')
+          .select('questions')
+          .eq('id', quizSessionId)
+          .single();
+
+        if (!sessionErr && sessionRow?.questions && Array.isArray(sessionRow.questions)) {
+          const byId: Record<string, any> = {};
+          (sessionRow.questions as any[]).forEach((q) => { if (q?.id) byId[q.id] = q; });
+          details = details.map(d => {
+            if (d.question || !d.question_id) return d;
+            const q = byId[d.question_id];
+            return q ? {
+              ...d,
+              question: {
+                book_of_bible: q.book_of_bible,
+                chapter: q.chapter,
+                question: q.question,
+                answer: q.answer,
+                points: q.points,
+                tier: q.tier,
+              }
+            } : d;
+          });
+        }
+      }
+
+      setQuestionDetails(details as any);
     } catch (err: any) {
       console.error('💥 Error fetching question details:', err);
       setError(err.message || 'Failed to load question details');
