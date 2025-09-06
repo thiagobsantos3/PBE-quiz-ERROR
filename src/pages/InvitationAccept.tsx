@@ -134,7 +134,7 @@ export function InvitationAccept() {
       // Get the inviter's profile separately
       let inviterName = 'Unknown User';
       if (row.invited_by) {
-        developerLog('👤 InvitationAccept: Loading inviter profile for:', data.invited_by);
+        developerLog('👤 InvitationAccept: Loading inviter profile for:', row.invited_by);
         const { data: inviterNameResult, error: inviterError } = await supabase
           .rpc('get_user_name_by_id', { p_user_id: row.invited_by });
         
