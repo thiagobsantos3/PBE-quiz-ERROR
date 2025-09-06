@@ -598,6 +598,11 @@ export function QuizSessionProvider({ children }: { children: ReactNode }) {
             let numFast2OrLess = 0;
             let numFast2OrLessCorrect = 0;
 
+            // Points-weighted accumulators
+            let totalPointsPossibleSum = 0;
+            let ptsUltraFastSum = 0;
+            let ptsTimeRatioLowSum = 0;
+
             let maxConsecutiveFast2OrLess = 0;
             let currentStreakFast2OrLess = 0;
 
@@ -638,6 +643,11 @@ export function QuizSessionProvider({ children }: { children: ReactNode }) {
               if (highPointUltraFast) countHighPointUltraFast++;
               if (wordyUltraFast) countWordyUltraFast++;
               if (timeRatioLow) countTimeRatioLow++;
+
+              // Points sums
+              totalPointsPossibleSum += pts;
+              if (ultraFastCorrect) ptsUltraFastSum += pts;
+              if (timeRatioLow) ptsTimeRatioLowSum += pts;
 
               if (time <= 2) {
                 numFast2OrLess++;
@@ -683,11 +693,18 @@ export function QuizSessionProvider({ children }: { children: ReactNode }) {
 
             const streakOrBlockFlag = (maxConsecutiveFast2OrLess >= 5 || flagWindowManyFast3OrLess || flagWindowManyHighValueFast) ? 1 : 0;
 
-            let score = 0.30 * wordyUltraFastRate
-                      + 0.25 * highPointUltraFastRate
+            // Points-weighted shares
+            const pointsWeightedUltraFastShare = total > 0 && totalPointsPossibleSum > 0 ? (ptsUltraFastSum / totalPointsPossibleSum) : 0;
+            const pointsWeightedTimeRatioLowShare = total > 0 && totalPointsPossibleSum > 0 ? (ptsTimeRatioLowSum / totalPointsPossibleSum) : 0;
+
+            // Retuned weights to emphasize high-point ultra-fast and expected-time violations
+            let score = 0.35 * pointsWeightedUltraFastShare
+                      + 0.20 * pointsWeightedTimeRatioLowShare
                       + 0.20 * timeRatioLowRate
-                      + 0.15 * speedAccuracyFlag
-                      + 0.10 * streakOrBlockFlag;
+                      + 0.15 * wordyUltraFastRate
+                      + 0.05 * highPointUltraFastRate
+                      + 0.025 * speedAccuracyFlag
+                      + 0.025 * streakOrBlockFlag;
             if (score > 1) score = 1;
             const status = score >= 0.25 ? 'red' : score >= 0.15 ? 'amber' : 'green';
 
@@ -699,6 +716,8 @@ export function QuizSessionProvider({ children }: { children: ReactNode }) {
               highPointUltraFastRate: Number(highPointUltraFastRate.toFixed(3)),
               wordyUltraFastRate: Number(wordyUltraFastRate.toFixed(3)),
               timeRatioLowRate: Number(timeRatioLowRate.toFixed(3)),
+              pointsWeightedUltraFastShare: Number(pointsWeightedUltraFastShare.toFixed(3)),
+              pointsWeightedTimeRatioLowShare: Number(pointsWeightedTimeRatioLowShare.toFixed(3)),
               fast2Share: Number(fast2Share.toFixed(3)),
               fast2Accuracy: Number(fast2Accuracy.toFixed(3)),
               maxConsecutiveFast2OrLess: maxConsecutiveFast2OrLess,
