@@ -577,6 +577,7 @@ export function QuizSessionProvider({ children }: { children: ReactNode }) {
               const showAns = !!r?.show_answer_used;
               return {
                 fastCorrect: correct && time > 0 && time < tmin,
+                ultraFastCorrect: correct && time <= 2,
                 showAnswerFast: showAns && correct && time <= 2,
                 zeroOneCorrect: correct && time <= 1,
               };
@@ -584,25 +585,49 @@ export function QuizSessionProvider({ children }: { children: ReactNode }) {
 
             const total = Math.max(1, timeAgg.length);
             const fastCorrectRate = flags.filter(f => f.fastCorrect).length / total;
+            const ultraFastRate = flags.filter(f => f.ultraFastCorrect).length / total;
             const showAnswerFastRate = flags.filter(f => f.showAnswerFast).length / total;
             const zeroOneRate = flags.filter(f => f.zeroOneCorrect).length / total;
 
-            // Simple burst: any 5 consecutive fastCorrect
-            let burst = false, streak = 0;
+            // Stronger burst detection:
+            // - 5+ consecutive fastCorrect OR ultraFast
+            // - 3+ consecutive zero/one-second correct
+            let burst = false;
+            let streakFast = 0, maxStreakFast = 0;
+            let streakUltra = 0, maxStreakUltra = 0;
+            let streakZeroOne = 0, maxStreakZeroOne = 0;
             for (const f of flags) {
-              streak = f.fastCorrect ? streak + 1 : 0;
-              if (streak >= 5) { burst = true; break; }
+              streakFast = f.fastCorrect ? streakFast + 1 : 0;
+              maxStreakFast = Math.max(maxStreakFast, streakFast);
+
+              streakUltra = f.ultraFastCorrect ? streakUltra + 1 : 0;
+              maxStreakUltra = Math.max(maxStreakUltra, streakUltra);
+
+              streakZeroOne = f.zeroOneCorrect ? streakZeroOne + 1 : 0;
+              maxStreakZeroOne = Math.max(maxStreakZeroOne, streakZeroOne);
+            }
+            if (maxStreakFast >= 5 || maxStreakUltra >= 5 || maxStreakZeroOne >= 3) {
+              burst = true;
             }
 
-            let score = 0.5 * fastCorrectRate + 0.3 * showAnswerFastRate + 0.2 * zeroOneRate + (burst ? 0.1 : 0);
+            // Heavier weight on zero/one-second correct; moderate on fast/ultra-fast
+            let score = 0.65 * zeroOneRate
+                      + 0.20 * fastCorrectRate
+                      + 0.10 * ultraFastRate
+                      + 0.05 * showAnswerFastRate
+                      + (burst ? 0.10 : 0);
             if (score > 1) score = 1;
-            const status = score >= 0.35 ? 'red' : score >= 0.20 ? 'amber' : 'green';
+            const status = score >= 0.30 ? 'red' : score >= 0.18 ? 'amber' : 'green';
 
             const summary = {
               fastCorrectRate: Number(fastCorrectRate.toFixed(3)),
+              ultraFastRate: Number(ultraFastRate.toFixed(3)),
               showAnswerFastRate: Number(showAnswerFastRate.toFixed(3)),
               zeroOneRate: Number(zeroOneRate.toFixed(3)),
               burstDetected: burst,
+              maxConsecutiveFastCorrect: maxStreakFast,
+              maxConsecutiveUltraFast: maxStreakUltra,
+              maxConsecutiveZeroOne: maxStreakZeroOne,
               totalQuestions: total
             };
 
