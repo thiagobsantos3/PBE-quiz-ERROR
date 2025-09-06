@@ -14,7 +14,8 @@ ALTER TABLE public.quiz_question_logs
   ADD COLUMN IF NOT EXISTS show_answer_used boolean DEFAULT false;
 
 -- 3) Extend (or create) quiz_sessions_view to include suspicion fields
-CREATE OR REPLACE VIEW public.quiz_sessions_view AS
+DROP VIEW IF EXISTS public.quiz_sessions_view;
+CREATE VIEW public.quiz_sessions_view AS
 SELECT
   qs.id,
   qs.user_id,
