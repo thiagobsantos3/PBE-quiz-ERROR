@@ -632,7 +632,8 @@ export function QuizSessionProvider({ children }: { children: ReactNode }) {
               const ultraFastCorrect = correct && time <= 2;
               const zeroOneCorrect = correct && time <= 1;
               const showAnswerFast = showAns && correct && time <= 2;
-              const highPointUltraFast = correct && pts >= 4 && time <= 3;
+              const highPointUltraFast = correct && pts >= 4 && time <= 2;
+              const severeHighPointUltraFast = correct && pts >= 6 && time <= 2;
               const wordyUltraFast = correct && (qWords + aWords) >= 14 && time <= 2;
               const timeRatioLow = correct && expected > 0 && (time / expected) <= 0.3;
 
@@ -684,6 +685,12 @@ export function QuizSessionProvider({ children }: { children: ReactNode }) {
             const zeroOneRate = countZeroOne / total;
             const showAnswerFastRate = countShowAnswerFast / total;
             const highPointUltraFastRate = countHighPointUltraFast / total;
+            const severeHighPointUltraFastFlag = logs.some((r: any) => {
+              const pts = Number(r?.total_points_possible) || 1;
+              const time = Number(r?.time_spent) || 0;
+              const correct = !!r?.is_correct;
+              return correct && pts >= 6 && time <= 2;
+            }) ? 1 : 0;
             const wordyUltraFastRate = countWordyUltraFast / total;
             const timeRatioLowRate = countTimeRatioLow / total;
 
@@ -703,6 +710,7 @@ export function QuizSessionProvider({ children }: { children: ReactNode }) {
                       + 0.20 * timeRatioLowRate
                       + 0.15 * wordyUltraFastRate
                       + 0.05 * highPointUltraFastRate
+                      + 0.05 * severeHighPointUltraFastFlag
                       + 0.025 * speedAccuracyFlag
                       + 0.025 * streakOrBlockFlag;
             if (score > 1) score = 1;
@@ -718,6 +726,7 @@ export function QuizSessionProvider({ children }: { children: ReactNode }) {
               timeRatioLowRate: Number(timeRatioLowRate.toFixed(3)),
               pointsWeightedUltraFastShare: Number(pointsWeightedUltraFastShare.toFixed(3)),
               pointsWeightedTimeRatioLowShare: Number(pointsWeightedTimeRatioLowShare.toFixed(3)),
+              severeHighPointUltraFast: severeHighPointUltraFastFlag === 1,
               fast2Share: Number(fast2Share.toFixed(3)),
               fast2Accuracy: Number(fast2Accuracy.toFixed(3)),
               maxConsecutiveFast2OrLess: maxConsecutiveFast2OrLess,
