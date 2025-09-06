@@ -28,7 +28,7 @@ export function useQuizHistoryData({ userId, startDate, endDate }: UseQuizHistor
       console.log('🔍 useQuizHistoryData: Fetching quiz history for user:', userId, 'with date range:', startDate, endDate);
 
       let query = supabase
-        .from('quiz_sessions_view') // <--- CHANGE: Query the new view
+        .from('quiz_sessions_view')
         .select(`
           id,
           title,
@@ -39,7 +39,10 @@ export function useQuizHistoryData({ userId, startDate, endDate }: UseQuizHistor
           max_points,
           total_actual_time_spent_seconds,
           questions_count,
-          approval_status
+          approval_status,
+          suspicion_status,
+          suspicion_score,
+          suspicious_summary
         `)
         .eq('user_id', userId)
         .eq('status', 'completed');

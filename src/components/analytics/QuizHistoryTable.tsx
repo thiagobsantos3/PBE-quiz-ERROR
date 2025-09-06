@@ -19,6 +19,9 @@ interface QuizHistoryEntry {
   total_actual_time_spent_seconds: number;
   questions_count: number;
   approval_status?: 'approved' | 'pending' | 'rejected';
+  suspicion_status?: 'green' | 'amber' | 'red';
+  suspicion_score?: number;
+  suspicious_summary?: any;
 }
 
 interface QuizHistoryTableProps {
@@ -113,6 +116,27 @@ export function QuizHistoryTable({ data, loading, error, updateLocalQuizHistoryE
   };
 
   const columns: TableColumn<QuizHistoryEntry>[] = [
+    {
+      key: 'integrity',
+      header: 'Integrity',
+      render: (entry) => {
+        const status = entry.suspicion_status || 'green';
+        const score = typeof entry.suspicion_score === 'number' ? entry.suspicion_score : 0;
+        const color = status === 'red' ? 'text-red-700 bg-red-50 border-red-200'
+          : status === 'amber' ? 'text-amber-700 bg-amber-50 border-amber-200'
+          : 'text-green-700 bg-green-50 border-green-200';
+        const dot = status === 'red' ? 'bg-red-500' : status === 'amber' ? 'bg-amber-500' : 'bg-green-500';
+        return (
+          <div className={`inline-flex items-center space-x-2 px-2.5 py-1 rounded-full text-xs font-medium border ${color}`}>
+            <span className={`h-2 w-2 rounded-full ${dot}`}></span>
+            <span className="capitalize">{status}</span>
+            <span className="text-gray-500">{(score * 100).toFixed(0)}%</span>
+          </div>
+        );
+      },
+      className: 'text-left',
+      headerClassName: 'text-left',
+    },
     {
       key: 'title',
       header: 'Quiz Title',

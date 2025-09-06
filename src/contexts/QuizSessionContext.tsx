@@ -550,7 +550,7 @@ export function QuizSessionProvider({ children }: { children: ReactNode }) {
         try {
           const { data: timeAgg, error: timeErr } = await supabase
             .from('quiz_question_logs')
-            .select('time_spent', { count: 'exact', head: false })
+            .select('time_spent, is_correct, show_answer_used, total_points_possible')
             .eq('quiz_session_id', sessionId);
 
           if (!timeErr && Array.isArray(timeAgg)) {
@@ -566,6 +566,62 @@ export function QuizSessionProvider({ children }: { children: ReactNode }) {
                 // Also reflect in local state immediately
                 finalUpdates.total_actual_time_spent_seconds = sumSeconds;
               }
+            }
+
+            // Compute suspicion fields
+            const flags = timeAgg.map((r: any) => {
+              const pts = Number(r?.total_points_possible) || 1;
+              const tmin = Math.max(2, 2 * pts);
+              const time = Number(r?.time_spent) || 0;
+              const correct = !!r?.is_correct;
+              const showAns = !!r?.show_answer_used;
+              return {
+                fastCorrect: correct && time > 0 && time < tmin,
+                showAnswerFast: showAns && correct && time <= 2,
+                zeroOneCorrect: correct && time <= 1,
+              };
+            });
+
+            const total = Math.max(1, timeAgg.length);
+            const fastCorrectRate = flags.filter(f => f.fastCorrect).length / total;
+            const showAnswerFastRate = flags.filter(f => f.showAnswerFast).length / total;
+            const zeroOneRate = flags.filter(f => f.zeroOneCorrect).length / total;
+
+            // Simple burst: any 5 consecutive fastCorrect
+            let burst = false, streak = 0;
+            for (const f of flags) {
+              streak = f.fastCorrect ? streak + 1 : 0;
+              if (streak >= 5) { burst = true; break; }
+            }
+
+            let score = 0.5 * fastCorrectRate + 0.3 * showAnswerFastRate + 0.2 * zeroOneRate + (burst ? 0.1 : 0);
+            if (score > 1) score = 1;
+            const status = score >= 0.35 ? 'red' : score >= 0.20 ? 'amber' : 'green';
+
+            const summary = {
+              fastCorrectRate: Number(fastCorrectRate.toFixed(3)),
+              showAnswerFastRate: Number(showAnswerFastRate.toFixed(3)),
+              zeroOneRate: Number(zeroOneRate.toFixed(3)),
+              burstDetected: burst,
+              totalQuestions: total
+            };
+
+            const sessionUpdates: any = {
+              suspicion_status: status,
+              suspicion_score: Number(score.toFixed(3)),
+              suspicious_summary: summary,
+            };
+            // Optional auto-review: set red sessions to pending
+            // sessionUpdates.approval_status = status === 'red' ? 'pending' : undefined;
+
+            const { error: suspErr } = await supabase
+              .from('quiz_sessions')
+              .update(sessionUpdates)
+              .eq('id', sessionId);
+            if (!suspErr) {
+              finalUpdates.suspicion_status = sessionUpdates.suspicion_status;
+              finalUpdates.suspicion_score = sessionUpdates.suspicion_score;
+              finalUpdates.suspicious_summary = sessionUpdates.suspicious_summary;
             }
           }
         } catch (tErr) {

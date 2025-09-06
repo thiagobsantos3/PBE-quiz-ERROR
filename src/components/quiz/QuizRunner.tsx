@@ -186,7 +186,8 @@ export function QuizRunner({
           total_points_possible: totalPoints,
           time_spent: timeSpent,
           answered_at: new Date().toISOString(),
-          is_correct: isCorrect
+          is_correct: isCorrect,
+          show_answer_used: showAnswer
         }]);
 
       if (error) {
