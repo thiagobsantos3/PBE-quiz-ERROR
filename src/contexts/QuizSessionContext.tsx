@@ -550,7 +550,7 @@ export function QuizSessionProvider({ children }: { children: ReactNode }) {
         try {
           const { data: timeAgg, error: timeErr } = await supabase
             .from('quiz_question_logs')
-            .select('time_spent, is_correct, show_answer_used, total_points_possible, question_id, answered_at')
+            .select('time_spent, is_correct, show_answer_used, total_points_possible, question_id, answered_at, points_earned')
             .eq('quiz_session_id', sessionId);
 
           if (!timeErr && Array.isArray(timeAgg)) {
@@ -603,6 +603,12 @@ export function QuizSessionProvider({ children }: { children: ReactNode }) {
             let ptsUltraFastSum = 0;
             let ptsTimeRatioLowSum = 0;
 
+            // Totals for throughput and entropy
+            let totalPointsEarnedSum = 0;
+            let totalTimeSum = 0;
+            let sumTimeSq = 0;
+            let correctCount = 0;
+
             let maxConsecutiveFast2OrLess = 0;
             let currentStreakFast2OrLess = 0;
 
@@ -618,6 +624,7 @@ export function QuizSessionProvider({ children }: { children: ReactNode }) {
               const time = Number(r?.time_spent) || 0;
               const correct = !!r?.is_correct;
               const showAns = !!r?.show_answer_used;
+              const earned = Number(r?.points_earned) || (correct ? pts : 0);
               const qId = r?.question_id as string | undefined;
               const qMeta = qId ? questionById.get(qId) : undefined;
               const qText = normalizeText(qMeta?.question);
@@ -626,7 +633,8 @@ export function QuizSessionProvider({ children }: { children: ReactNode }) {
               const aWords = countWords(aText);
 
               const tmin = Math.max(2, 2 * pts);
-              const expected = tmin + 0.2 * (qWords + aWords);
+              // Stronger reading-time model: ~0.4s per word for question + answer
+              const expected = tmin + 0.4 * (qWords + aWords);
 
               const fastCorrect = correct && time > 0 && time < tmin;
               const ultraFastCorrect = correct && time <= 2;
@@ -649,6 +657,12 @@ export function QuizSessionProvider({ children }: { children: ReactNode }) {
               totalPointsPossibleSum += pts;
               if (ultraFastCorrect) ptsUltraFastSum += pts;
               if (timeRatioLow) ptsTimeRatioLowSum += pts;
+
+              // Totals for throughput and entropy
+              totalPointsEarnedSum += earned;
+              totalTimeSum += time;
+              sumTimeSq += time * time;
+              if (correct) correctCount++;
 
               if (time <= 2) {
                 numFast2OrLess++;
@@ -704,15 +718,72 @@ export function QuizSessionProvider({ children }: { children: ReactNode }) {
             const pointsWeightedUltraFastShare = total > 0 && totalPointsPossibleSum > 0 ? (ptsUltraFastSum / totalPointsPossibleSum) : 0;
             const pointsWeightedTimeRatioLowShare = total > 0 && totalPointsPossibleSum > 0 ? (ptsTimeRatioLowSum / totalPointsPossibleSum) : 0;
 
-            // Retuned weights to emphasize high-point ultra-fast and expected-time violations
-            let score = 0.35 * pointsWeightedUltraFastShare
-                      + 0.20 * pointsWeightedTimeRatioLowShare
-                      + 0.20 * timeRatioLowRate
-                      + 0.15 * wordyUltraFastRate
-                      + 0.05 * highPointUltraFastRate
-                      + 0.05 * severeHighPointUltraFastFlag
-                      + 0.025 * speedAccuracyFlag
-                      + 0.025 * streakOrBlockFlag;
+            // Points-per-second throughput (overall and windowed)
+            const overallPtsPerSec = totalTimeSum > 0 ? (totalPointsEarnedSum / totalTimeSum) : 0;
+            let windowHighPpsFlag = 0;
+            for (let i = 0; i < logs.length; i++) {
+              const j = Math.min(logs.length, i + windowSize);
+              let wPts = 0; let wTime = 0;
+              for (let k = i; k < j; k++) {
+                const rr: any = logs[k];
+                const earned = Number(rr?.points_earned) || (rr?.is_correct ? (Number(rr?.total_points_possible) || 1) : 0);
+                const t = Number(rr?.time_spent) || 0;
+                wPts += earned; wTime += t;
+              }
+              if (wTime > 0 && (wPts / wTime) >= 1.0) { windowHighPpsFlag = 1; break; }
+            }
+
+            // Inter-question latency (submissions delta)
+            let lowLatencyCount = 0; let trans = 0; let lowLatencyWindowFlag = 0;
+            for (let i = 1; i < logs.length; i++) {
+              const prev = logs[i-1]; const cur = logs[i];
+              const tPrev = prev?.answered_at ? new Date(prev.answered_at).getTime() : 0;
+              const tCur = cur?.answered_at ? new Date(cur.answered_at).getTime() : 0;
+              if (tPrev > 0 && tCur > 0) {
+                const dtSec = (tCur - tPrev) / 1000;
+                trans++;
+                if (dtSec <= 1) lowLatencyCount++;
+              }
+            }
+            const lowLatencyRate = trans > 0 ? (lowLatencyCount / trans) : 0;
+            // Windowed latency dense: 10 consecutive transitions with >=6 under 1s
+            for (let i = 1; i + 10 <= logs.length; i++) {
+              let cnt = 0;
+              let considered = 0;
+              for (let k = i; k < Math.min(logs.length, i + 10); k++) {
+                const p = logs[k-1]; const c = logs[k];
+                const tp = p?.answered_at ? new Date(p.answered_at).getTime() : 0;
+                const tc = c?.answered_at ? new Date(c.answered_at).getTime() : 0;
+                if (tp > 0 && tc > 0) {
+                  considered++;
+                  if (((tc - tp) / 1000) <= 1) cnt++;
+                }
+              }
+              if (considered >= 8 && cnt >= 6) { lowLatencyWindowFlag = 1; break; }
+            }
+
+            // Timing entropy (coefficient of variation) and accuracy
+            const meanTime = logs.length > 0 ? (totalTimeSum / logs.length) : 0;
+            const variance = logs.length > 1 ? Math.max(0, (sumTimeSq / logs.length) - (meanTime * meanTime)) : 0;
+            const stdDev = Math.sqrt(variance);
+            const cv = meanTime > 0 ? (stdDev / meanTime) : 1;
+            const accuracyRate = total > 0 ? (correctCount / total) : 0;
+            const lowEntropyHighAccuracyFlag = (cv <= 0.25 && accuracyRate >= 0.9) ? 1 : 0;
+
+            // Retuned weights to include throughput, latency, and entropy signals
+            let score = 0.30 * pointsWeightedUltraFastShare
+                      + 0.18 * pointsWeightedTimeRatioLowShare
+                      + 0.15 * timeRatioLowRate
+                      + 0.12 * wordyUltraFastRate
+                      + 0.04 * highPointUltraFastRate
+                      + 0.04 * severeHighPointUltraFastFlag
+                      + 0.02 * speedAccuracyFlag
+                      + 0.02 * streakOrBlockFlag
+                      + 0.09 * (overallPtsPerSec >= 0.8 ? 1 : 0)
+                      + 0.06 * windowHighPpsFlag
+                      + 0.04 * (lowLatencyRate >= 0.3 ? 1 : 0)
+                      + 0.04 * lowLatencyWindowFlag
+                      + 0.04 * lowEntropyHighAccuracyFlag;
             if (score > 1) score = 1;
             const status = score >= 0.25 ? 'red' : score >= 0.15 ? 'amber' : 'green';
 
@@ -727,6 +798,12 @@ export function QuizSessionProvider({ children }: { children: ReactNode }) {
               pointsWeightedUltraFastShare: Number(pointsWeightedUltraFastShare.toFixed(3)),
               pointsWeightedTimeRatioLowShare: Number(pointsWeightedTimeRatioLowShare.toFixed(3)),
               severeHighPointUltraFast: severeHighPointUltraFastFlag === 1,
+              overallPtsPerSec: Number(overallPtsPerSec.toFixed(3)),
+              windowHighPps: windowHighPpsFlag === 1,
+              lowLatencyRate: Number(lowLatencyRate.toFixed(3)),
+              lowLatencyWindowDense: lowLatencyWindowFlag === 1,
+              timingCv: Number(cv.toFixed(3)),
+              accuracyRate: Number(accuracyRate.toFixed(3)),
               fast2Share: Number(fast2Share.toFixed(3)),
               fast2Accuracy: Number(fast2Accuracy.toFixed(3)),
               maxConsecutiveFast2OrLess: maxConsecutiveFast2OrLess,
