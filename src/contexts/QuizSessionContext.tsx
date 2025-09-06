@@ -550,7 +550,7 @@ export function QuizSessionProvider({ children }: { children: ReactNode }) {
         try {
           const { data: timeAgg, error: timeErr } = await supabase
             .from('quiz_question_logs')
-            .select('time_spent, is_correct, show_answer_used, total_points_possible')
+            .select('time_spent, is_correct, show_answer_used, total_points_possible, question_id, answered_at')
             .eq('quiz_session_id', sessionId);
 
           if (!timeErr && Array.isArray(timeAgg)) {
@@ -568,66 +568,142 @@ export function QuizSessionProvider({ children }: { children: ReactNode }) {
               }
             }
 
-            // Compute suspicion fields
-            const flags = timeAgg.map((r: any) => {
+            // Enrich with question metadata
+            const questionsArray: any[] = Array.isArray((currentSession as any).questions) ? (currentSession as any).questions : [];
+            const questionById = new Map<string, any>((questionsArray || []).map((q: any) => [q?.id, q]));
+            const normalizeText = (s: any): string => typeof s === 'string' ? s : '';
+            const countWords = (s: string): number => {
+              const trimmed = s.trim();
+              if (!trimmed) return 0;
+              const parts = trimmed.split(/\s+/);
+              return parts.filter(Boolean).length;
+            };
+
+            // Sort logs by answered_at when available to compute windows and streaks
+            const logs = [...timeAgg].sort((a: any, b: any) => {
+              const ta = a?.answered_at ? new Date(a.answered_at).getTime() : 0;
+              const tb = b?.answered_at ? new Date(b.answered_at).getTime() : 0;
+              return ta - tb;
+            });
+
+            const total = Math.max(1, logs.length);
+            let countFastCorrect = 0;
+            let countUltraFast = 0;
+            let countZeroOne = 0;
+            let countShowAnswerFast = 0;
+            let countHighPointUltraFast = 0;
+            let countWordyUltraFast = 0;
+            let countTimeRatioLow = 0;
+
+            let numFast2OrLess = 0;
+            let numFast2OrLessCorrect = 0;
+
+            let maxConsecutiveFast2OrLess = 0;
+            let currentStreakFast2OrLess = 0;
+
+            // Sliding window checks
+            const windowSize = 10;
+            let flagWindowManyFast3OrLess = false;
+            let flagWindowManyHighValueFast = false;
+
+            const perLog: { time: number; correct: boolean; pts: number }[] = [];
+
+            for (const r of logs as any[]) {
               const pts = Number(r?.total_points_possible) || 1;
-              const tmin = Math.max(2, 2 * pts);
               const time = Number(r?.time_spent) || 0;
               const correct = !!r?.is_correct;
               const showAns = !!r?.show_answer_used;
-              return {
-                fastCorrect: correct && time > 0 && time < tmin,
-                ultraFastCorrect: correct && time <= 2,
-                showAnswerFast: showAns && correct && time <= 2,
-                zeroOneCorrect: correct && time <= 1,
-              };
-            });
+              const qId = r?.question_id as string | undefined;
+              const qMeta = qId ? questionById.get(qId) : undefined;
+              const qText = normalizeText(qMeta?.question);
+              const aText = normalizeText(qMeta?.answer);
+              const qWords = countWords(qText);
+              const aWords = countWords(aText);
 
-            const total = Math.max(1, timeAgg.length);
-            const fastCorrectRate = flags.filter(f => f.fastCorrect).length / total;
-            const ultraFastRate = flags.filter(f => f.ultraFastCorrect).length / total;
-            const showAnswerFastRate = flags.filter(f => f.showAnswerFast).length / total;
-            const zeroOneRate = flags.filter(f => f.zeroOneCorrect).length / total;
+              const tmin = Math.max(2, 2 * pts);
+              const expected = tmin + 0.2 * (qWords + aWords);
 
-            // Stronger burst detection:
-            // - 5+ consecutive fastCorrect OR ultraFast
-            // - 3+ consecutive zero/one-second correct
-            let burst = false;
-            let streakFast = 0, maxStreakFast = 0;
-            let streakUltra = 0, maxStreakUltra = 0;
-            let streakZeroOne = 0, maxStreakZeroOne = 0;
-            for (const f of flags) {
-              streakFast = f.fastCorrect ? streakFast + 1 : 0;
-              maxStreakFast = Math.max(maxStreakFast, streakFast);
+              const fastCorrect = correct && time > 0 && time < tmin;
+              const ultraFastCorrect = correct && time <= 2;
+              const zeroOneCorrect = correct && time <= 1;
+              const showAnswerFast = showAns && correct && time <= 2;
+              const highPointUltraFast = correct && pts >= 4 && time <= 3;
+              const wordyUltraFast = correct && (qWords + aWords) >= 14 && time <= 2;
+              const timeRatioLow = correct && expected > 0 && (time / expected) <= 0.3;
 
-              streakUltra = f.ultraFastCorrect ? streakUltra + 1 : 0;
-              maxStreakUltra = Math.max(maxStreakUltra, streakUltra);
+              if (fastCorrect) countFastCorrect++;
+              if (ultraFastCorrect) countUltraFast++;
+              if (zeroOneCorrect) countZeroOne++;
+              if (showAnswerFast) countShowAnswerFast++;
+              if (highPointUltraFast) countHighPointUltraFast++;
+              if (wordyUltraFast) countWordyUltraFast++;
+              if (timeRatioLow) countTimeRatioLow++;
 
-              streakZeroOne = f.zeroOneCorrect ? streakZeroOne + 1 : 0;
-              maxStreakZeroOne = Math.max(maxStreakZeroOne, streakZeroOne);
+              if (time <= 2) {
+                numFast2OrLess++;
+                if (correct) numFast2OrLessCorrect++;
+                currentStreakFast2OrLess += 1;
+              } else {
+                currentStreakFast2OrLess = 0;
+              }
+              if (currentStreakFast2OrLess > maxConsecutiveFast2OrLess) {
+                maxConsecutiveFast2OrLess = currentStreakFast2OrLess;
+              }
+
+              perLog.push({ time, correct, pts });
             }
-            if (maxStreakFast >= 5 || maxStreakUltra >= 5 || maxStreakZeroOne >= 3) {
-              burst = true;
+
+            // Window scans for density patterns
+            for (let i = 0; i < perLog.length; i++) {
+              const j = Math.min(perLog.length, i + windowSize);
+              const window = perLog.slice(i, j);
+              if (window.length === 0) continue;
+              const fast3OrLessCount = window.filter(x => x.time <= 3).length;
+              if (fast3OrLessCount >= 8) {
+                flagWindowManyFast3OrLess = true;
+              }
+              const highValueFastCount = window.filter(x => x.pts >= 6 && x.time <= 3).length;
+              if (highValueFastCount >= 3) {
+                flagWindowManyHighValueFast = true;
+              }
+              if (flagWindowManyFast3OrLess && flagWindowManyHighValueFast) break;
             }
 
-            // Heavier weight on zero/one-second correct; moderate on fast/ultra-fast
-            let score = 0.65 * zeroOneRate
-                      + 0.20 * fastCorrectRate
-                      + 0.10 * ultraFastRate
-                      + 0.05 * showAnswerFastRate
-                      + (burst ? 0.10 : 0);
+            const fastCorrectRate = countFastCorrect / total;
+            const ultraFastRate = countUltraFast / total;
+            const zeroOneRate = countZeroOne / total;
+            const showAnswerFastRate = countShowAnswerFast / total;
+            const highPointUltraFastRate = countHighPointUltraFast / total;
+            const wordyUltraFastRate = countWordyUltraFast / total;
+            const timeRatioLowRate = countTimeRatioLow / total;
+
+            const fast2Share = numFast2OrLess / total;
+            const fast2Accuracy = numFast2OrLess > 0 ? (numFast2OrLessCorrect / numFast2OrLess) : 0;
+            const speedAccuracyFlag = (fast2Share >= 0.3 && fast2Accuracy >= 0.9) ? 1 : 0;
+
+            const streakOrBlockFlag = (maxConsecutiveFast2OrLess >= 5 || flagWindowManyFast3OrLess || flagWindowManyHighValueFast) ? 1 : 0;
+
+            let score = 0.30 * wordyUltraFastRate
+                      + 0.25 * highPointUltraFastRate
+                      + 0.20 * timeRatioLowRate
+                      + 0.15 * speedAccuracyFlag
+                      + 0.10 * streakOrBlockFlag;
             if (score > 1) score = 1;
-            const status = score >= 0.30 ? 'red' : score >= 0.18 ? 'amber' : 'green';
+            const status = score >= 0.25 ? 'red' : score >= 0.15 ? 'amber' : 'green';
 
             const summary = {
               fastCorrectRate: Number(fastCorrectRate.toFixed(3)),
               ultraFastRate: Number(ultraFastRate.toFixed(3)),
-              showAnswerFastRate: Number(showAnswerFastRate.toFixed(3)),
               zeroOneRate: Number(zeroOneRate.toFixed(3)),
-              burstDetected: burst,
-              maxConsecutiveFastCorrect: maxStreakFast,
-              maxConsecutiveUltraFast: maxStreakUltra,
-              maxConsecutiveZeroOne: maxStreakZeroOne,
+              showAnswerFastRate: Number(showAnswerFastRate.toFixed(3)),
+              highPointUltraFastRate: Number(highPointUltraFastRate.toFixed(3)),
+              wordyUltraFastRate: Number(wordyUltraFastRate.toFixed(3)),
+              timeRatioLowRate: Number(timeRatioLowRate.toFixed(3)),
+              fast2Share: Number(fast2Share.toFixed(3)),
+              fast2Accuracy: Number(fast2Accuracy.toFixed(3)),
+              maxConsecutiveFast2OrLess: maxConsecutiveFast2OrLess,
+              windowFast3OrLessDense: flagWindowManyFast3OrLess,
+              windowHighValueFastDense: flagWindowManyHighValueFast,
               totalQuestions: total
             };
 
