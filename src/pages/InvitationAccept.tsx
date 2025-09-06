@@ -112,75 +112,31 @@ export function InvitationAccept() {
       setLoading(true);
       setError(null);
 
-      // Load invitation details using the token
-      const { data, error } = await supabase
-        .from('team_invitations')
-        .select(`
-          id,
-          email,
-          role,
-          status,
-          expires_at,
-          invited_by,
-          team_id,
-          teams:team_id (
-            id,
-            name,
-            description
-          )
-        `)
-        .eq('token', token)
-        .eq('status', 'pending')
-        .gt('expires_at', new Date().toISOString())
-        .maybeSingle();
+      // Prefer RPC that bypasses RLS safely using the token
+      const { data: rpcData, error: rpcError } = await supabase
+        .rpc('verify_invitation_and_team', { p_token: token });
 
-      if (error) {
-        developerLog('❌ InvitationAccept: Error loading invitation:', error);
-        setError('Failed to load invitation details');
+      if (rpcError) {
+        developerLog('❌ InvitationAccept: RPC error verify_invitation_and_team:', rpcError);
+        setError('Failed to verify invitation');
         return;
       }
 
-      if (!data) {
-        developerLog('⚠️ InvitationAccept: No invitation found for token:', token);
+      const row = Array.isArray(rpcData) ? rpcData[0] : rpcData;
+      if (!row) {
+        developerLog('⚠️ InvitationAccept: RPC returned no rows for token:', token);
         setError('Invitation not found or has expired');
         return;
       }
 
-      developerLog('📧 InvitationAccept: Invitation data loaded:', data);
-      developerLog('🔍 InvitationAccept: Raw team data from join:', data.teams);
-      developerLog('🔍 InvitationAccept: Raw team_id:', data.team_id);
-
-      // Load team data separately if the join didn't work
-      let teamData = data.teams;
-      if (!teamData && data.team_id) {
-        developerLog('🔄 InvitationAccept: Loading team data separately for:', data.team_id);
-        const { data: separateTeamData, error: teamError } = await supabase
-          .from('teams')
-          .select('id, name, description')
-          .eq('id', data.team_id)
-          .single();
-          
-        if (!teamError && separateTeamData) {
-          teamData = separateTeamData;
-          developerLog('✅ InvitationAccept: Team data loaded separately:', teamData);
-        } else {
-          developerLog('❌ InvitationAccept: Failed to load team data:', teamError);
-        }
-      }
-
-      // Check if the team data exists
-      if (!teamData) {
-        developerLog('⚠️ InvitationAccept: Team data missing from invitation');
-        setError('The team associated with this invitation no longer exists');
-        return;
-      }
+      developerLog('📧 InvitationAccept: RPC verified invitation:', row);
 
       // Get the inviter's profile separately
       let inviterName = 'Unknown User';
-      if (data.invited_by) {
+      if (row.invited_by) {
         developerLog('👤 InvitationAccept: Loading inviter profile for:', data.invited_by);
         const { data: inviterNameResult, error: inviterError } = await supabase
-          .rpc('get_user_name_by_id', { p_user_id: data.invited_by });
+          .rpc('get_user_name_by_id', { p_user_id: row.invited_by });
         
         if (!inviterError && inviterNameResult) {
           inviterName = inviterNameResult;
@@ -191,15 +147,15 @@ export function InvitationAccept() {
       }
 
       const invitationData: InvitationData = {
-        id: data.id,
-        email: data.email,
-        role: data.role,
-        status: data.status,
-        expiresAt: data.expires_at,
+        id: row.invitation_id,
+        email: row.email,
+        role: row.role,
+        status: row.status,
+        expiresAt: row.expires_at,
         team: {
-          id: teamData.id,
-          name: teamData.name,
-          description: teamData.description,
+          id: row.team_id,
+          name: row.team_name,
+          description: row.team_description,
         },
         inviter: {
           name: inviterName
